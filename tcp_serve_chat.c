@@ -12,7 +12,6 @@ typedef struct	s_list
 {
 	int	fd;
 	int	id;
-	bool	flag;
 	char	*msg;
 	struct s_list	*next;
 }	t_list;
@@ -170,7 +169,6 @@ void	register_client(int client_socket)
 	new->fd = client_socket;
 	new->id = last_id;
 	new->next = NULL;
-	new->flag = true;
 	new->msg = NULL;
 	push_back(new, &head);
 	if (client_socket > max)
