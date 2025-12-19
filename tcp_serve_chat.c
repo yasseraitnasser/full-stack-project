@@ -1,102 +1,254 @@
-#include "header.h"
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>          /* See NOTES */
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <stdbool.h>
 
-int	main()
+
+typedef struct	s_list
 {
-	printf("Configuring local address...\n");
-	struct addrinfo	hints;
-	memset(&hints, 0, sizeof hints);
-	hints.ai_family = AF_INET;
-	hints.ai_flags = AI_PASSIVE;
-	hints.ai_socktype = SOCK_STREAM;
+	int	fd;
+	int	id;
+	bool	flag;
+	char	*msg;
+	struct s_list	*next;
+}	t_list;
 
-	struct addrinfo	*bind_address;
-	getaddrinfo(0, "8080", &hints, &bind_address);
+fd_set	master, rfds, wfds;
+t_list	*head = NULL;
+int	max = 0;
+char	buffer[1001];
+int	last_id = 0;
 
-	printf("Creating socket...\n");
-	int	socket_listen = socket(bind_address->ai_family,
-		bind_address->ai_socktype, bind_address->ai_protocol);
+int extract_message(char **buf, char **msg)
+{
+	char	*newbuf;
+	int	i;
 
-	printf("Binding socket to local address...\n");
-	if (bind(socket_listen, bind_address->ai_addr, bind_address->ai_addrlen))
+	*msg = 0;
+	if (*buf == 0)
+		return (0);
+	i = 0;
+	while ((*buf)[i])
 	{
-		fprintf(stderr, "listen() failed. (%d)\n", errno);
-		return 1;
+		if ((*buf)[i] == '\n')
+		{
+			newbuf = calloc(1, sizeof(*newbuf) * (strlen(*buf + i + 1) + 1));
+			if (newbuf == 0)
+				return (-1);
+			strcpy(newbuf, *buf + i + 1);
+			*msg = *buf;
+			(*msg)[i + 1] = 0;
+			*buf = newbuf;
+			return (1);
+		}
+		i++;
 	}
-	freeaddrinfo(bind_address);
-	printf("Listening...\n");
-	if (listen(socket_listen, 10) < 0)
-	{
-		fprintf(stderr, "listen() failed. (%d)\n", errno);
-		return 1;
-	}
+	return (0);
+}
 
-	fd_set	master;
+char *str_join(char *buf, char *add)
+{
+	char	*newbuf;
+	int		len;
+
+	if (buf == 0)
+		len = 0;
+	else
+		len = strlen(buf);
+	newbuf = malloc(sizeof(*newbuf) * (len + strlen(add) + 1));
+	if (newbuf == 0)
+		return (0);
+	newbuf[0] = 0;
+	if (buf != 0)
+		strcat(newbuf, buf);
+	free(buf);
+	strcat(newbuf, add);
+	return (newbuf);
+}
+
+void	ft_erro_exit(char *msg)
+{
+	write(2, msg, strlen(msg));
+	exit(1);
+}
+
+int	list_size(t_list *head)
+{
+	int	size = 0;
+
+	while (head)
+	{
+		size++;
+		head = head->next;
+	}
+	return (size);
+}
+
+void	broadcast(int c, char *str)
+{
+	for (int i = 0 ; i <= max ; i++)
+	{
+		if (FD_ISSET(i, &wfds) && i != c)
+			write(i, str, strlen(str));
+	}
+}
+
+void	send_msg(int fd, t_list *client)
+{
+	char	*msg;
+
+	while (extract_message(&(client->msg), &msg))
+	{
+		sprintf(buffer, "client %d: ", client->id);
+		broadcast(fd, buffer);
+		broadcast(fd, msg);
+		free(msg);
+	}
+}
+
+void	push_back(t_list *new, t_list **head)
+{
+	if (*head == NULL)
+	{
+		*head = new;
+		return ;
+	}
+	t_list	*tmp = *head;
+	while (tmp->next)
+	{
+		tmp = tmp->next;
+	}
+	tmp->next = new;
+}
+
+void	erase(int fd, t_list **head)
+{
+	t_list	*tmp = *head;
+
+	if (!tmp)
+		return ;
+	if (tmp->fd == fd)
+	{
+		*head = (*head)->next;
+		free(tmp);
+		return ;
+	}
+	while (tmp->next)
+	{
+		if (tmp->next->fd == fd)
+		{
+			t_list	*tmp2 = tmp->next;
+			tmp->next = tmp2->next;
+			free(tmp2);
+			return ;
+		}
+		tmp = tmp->next;
+	}
+}
+
+t_list	*find_client(int fd, t_list *head)
+{
+	while (head)
+	{
+		if (head->fd == fd)
+			return head;
+		head = head->next;
+	}
+	return (NULL);
+}
+
+void	register_client(int client_socket)
+{
+	FD_SET(client_socket, &master);
+	t_list	*new = malloc(sizeof(t_list));
+	if (!new)
+		ft_erro_exit("Fatal error\n");
+	new->fd = client_socket;
+	new->id = last_id;
+	new->next = NULL;
+	new->flag = true;
+	new->msg = NULL;
+	push_back(new, &head);
+	if (client_socket > max)
+		max = client_socket;
+	sprintf(buffer, "server: client %d just arrived\n", last_id++);
+	broadcast(client_socket, buffer);
+}
+
+void	remove_client(int s, int client_id)
+{
+	close(s);
+	FD_CLR(s, &master);
+	sprintf(buffer, "server: client %d just left\n", client_id);
+	broadcast(s, buffer);
+	erase(s, &head);
+}
+
+int	main(int argc, char **argv)
+{
+	if (argc != 2)
+		ft_erro_exit("Wrong number of arguments\n");
+	int	server_socket;
+	struct sockaddr_in	addr;
+	socklen_t		addrlen = sizeof addr;
+
+	// socket create and verification
+	server_socket = socket(AF_INET, SOCK_STREAM, 0);
+	if (server_socket == -1)
+		ft_erro_exit("Fatal error\n");
+	bzero(&addr, sizeof(addr));
+
+	// assign IP, PORT
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl(2130706433); //127.0.0.1
+	addr.sin_port = htons(atoi(argv[1]));
+
+	// Binding newly created socket to given IP and verification
+	if ((bind(server_socket, (const struct sockaddr *)&addr, addrlen)) != 0)
+		ft_erro_exit("Fatal error\n");
+	if (listen(server_socket, 100) != 0)
+		ft_erro_exit("Fatal error\n");
+
 	FD_ZERO(&master);
-	FD_SET(socket_listen, &master);
-	int	max_socket = socket_listen;
-
-	printf("Waiting for connections...\n");
+	FD_SET(server_socket, &master);
+	max = server_socket;
 	while (1)
 	{
-		fd_set	reads;
-		reads = master;
-		if (select(max_socket + 1, &reads, 0, 0, 0) < 0)
+		rfds = wfds = master;
+		if (select(max + 1, &rfds, &wfds, 0, 0) < 0)
+			ft_erro_exit("Fatal error\n");
+		for (int s = 0 ; s <= max ; s++)
 		{
-			fprintf(stderr, "select() failed. (%d)\n", errno);
-			return 1;
-		}
-		for (int i = 0 ; i <= max_socket ; i++)
-		{
-			if (FD_ISSET(i, &reads))
+			if (!FD_ISSET(s, &rfds))
+				continue ;
+			if (s == server_socket)
 			{
-				if (i == socket_listen)
+				int	client_socket = accept(s, 0, 0);
+				if (client_socket >= 0)
 				{
-					struct sockaddr_storage	client_address;
-					socklen_t	client_len = sizeof(client_address);
-					int	socket_client = accept(socket_listen,
-						(struct sockaddr*)&client_address,
-						&client_len);
-					if (socket_client < 0)
-					{
-						fprintf(stderr, "accept() failed. (%d)\n",
-							errno);
-						return 1;
-					}
-					FD_SET(socket_client, &master);
-					if (socket_client > max_socket)
-						max_socket = socket_client;
-					char	address_buffer[100];
-					getnameinfo((struct sockaddr*)&client_address,
-						client_len, address_buffer, 100, 0, 0,
-						NI_NUMERICHOST);
-					printf("New connection from %s\n", address_buffer);
+					register_client(client_socket);
+					break ;
 				}
-				else
+			}
+			else
+			{
+				t_list	*client = find_client(s, head);
+				int	bytes = recv(s, buffer, 1000, 0);
+				if (bytes <= 0)
 				{
-					char	red[1024];
-					int	bytes_received = read(i, red, 1024);
-					if (bytes_received <= 0)
-					{
-						FD_CLR(i, &master);
-						close(i);
-						continue ;
-					}
-					for (int j = 0 ; j <= max_socket ; j++)
-					{
-						if (FD_ISSET(j, &master))
-						{
-							if (j == socket_listen || j == i)
-								continue ;
-							else
-								write(j, red, bytes_received);
-						}
-					}
+					remove_client(s, client->id);
+					break ;
 				}
-			} // FD_ISSET
-		} // for i to max_socket
-	} // while (1)
-	printf("Closing listening socket...\n");
-	close(socket_listen);
-	printf("Finished\n");
+				buffer[bytes] = 0;
+				client->msg = str_join(client->msg, buffer);
+				send_msg(s, client);
+			}
+		}
+	}
+	close(server_socket);
 	return (0);
 }
