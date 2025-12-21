@@ -22,6 +22,7 @@ int	max = 0;
 char	buffer[1001];
 int	last_id = 0;
 
+	// COPY PAST from main.c
 int extract_message(char **buf, char **msg)
 {
 	char	*newbuf;
@@ -68,6 +69,7 @@ char *str_join(char *buf, char *add)
 	strcat(newbuf, add);
 	return (newbuf);
 }
+	// COPY PAST from main.c
 
 void	ft_erro_exit(char *msg)
 {
@@ -75,7 +77,7 @@ void	ft_erro_exit(char *msg)
 	exit(1);
 }
 
-int	list_size(t_list *head)
+int	list_size(t_list *head) // for debugging
 {
 	int	size = 0;
 
